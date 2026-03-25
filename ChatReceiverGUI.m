@@ -22,6 +22,7 @@ classdef ChatReceiverGUI < handle
         LastFileTimestamp    char = ''
         LastPacketSignature  char = ''
         ConsecutiveDecodeMisses double = 0
+        SignalBuffer         double = double([])
     end
 
     methods
@@ -85,6 +86,7 @@ classdef ChatReceiverGUI < handle
             end
 
             try
+                app.SignalBuffer = double([]);
                 app.prepareListenerResources();
                 app.ListenTimer = timer( ...
                     'ExecutionMode', 'fixedSpacing', ...
@@ -112,6 +114,7 @@ classdef ChatReceiverGUI < handle
                 release(app.PlutoReceiver);
             end
             app.PlutoReceiver = [];
+            app.SignalBuffer = double([]);
 
             app.IsListening = false;
             if ~isempty(app.StatusLabel) && isvalid(app.StatusLabel)
@@ -128,11 +131,11 @@ classdef ChatReceiverGUI < handle
             sampleRate = ChatSignalProcessor.defaultSettings().SampleRate;
             timeAxis = (0:numel(app.LastFMWaveform) - 1) / sampleRate;
             figure('Name', 'Receiver FM Waveform', 'NumberTitle', 'off', 'Color', 'w');
-            plot(timeAxis, app.LastFMWaveform, 'k');
+            plot(timeAxis, real(app.LastFMWaveform), 'k');
             grid on;
             xlabel('Time (s)');
             ylabel('Amplitude');
-            title('Received FM Chat Waveform');
+            title('Received FM Chat Waveform (Real Part)');
         end
 
         function appendMessage(app, message)
@@ -253,7 +256,12 @@ classdef ChatReceiverGUI < handle
                         app.prepareListenerResources();
                     end
                     receivedSamples = app.PlutoReceiver();
-                    fmWaveform = real(receivedSamples(:)).';
+                    app.SignalBuffer = [app.SignalBuffer, receivedSamples(:).'];
+                    maxBufferSamples = 4 * settings.PlutoFrameLength;
+                    if numel(app.SignalBuffer) > maxBufferSamples
+                        app.SignalBuffer = app.SignalBuffer(end - maxBufferSamples + 1:end);
+                    end
+                    fmWaveform = app.SignalBuffer;
                     sampleRate = settings.SampleRate;
                     sourceChanged = true;
                 case {'Simulation File Loopback', 'No SDR (Signal Demo)'}
@@ -284,6 +292,7 @@ classdef ChatReceiverGUI < handle
 
                     app.LastFileTimestamp = fileTimestamp;
                     fmWaveform = loaded.savedWaveform;
+                    app.SignalBuffer = fmWaveform;
                     sampleRate = metadata.SampleRate;
                     sourceChanged = true;
                 otherwise

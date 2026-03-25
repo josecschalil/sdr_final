@@ -8,11 +8,12 @@ classdef ChatSignalProcessor
                 'BitRate', 1200, ...
                 'MarkFrequency', 1200, ...
                 'SpaceFrequency', 2200, ...
-                'FMCarrierFrequency', 10000, ...
                 'FMFrequencyDeviation', 3000, ...
                 'PlutoBasebandSampleRate', 96000, ...
                 'PlutoFrameLength', 65536, ...
-                'PlutoBurstRepeats', 12);
+                'PlutoBurstRepeats', 12, ...
+                'AX25PreambleFlags', 32, ...
+                'AX25PostambleFlags', 4);
         end
 
         function packet = createAX25Packet(message)
@@ -58,11 +59,12 @@ classdef ChatSignalProcessor
                 error('Sample rate must be an integer multiple of the bit rate.');
             end
 
-            flagBytes = uint8([126 126 126]);
-            flagBits = ChatSignalProcessor.bytesToLSBFirstBits(flagBytes);
+            preambleFlags = repmat(uint8(126), 1, settings.AX25PreambleFlags);
+            postambleFlags = repmat(uint8(126), 1, settings.AX25PostambleFlags);
+            flagBits = ChatSignalProcessor.bytesToLSBFirstBits(preambleFlags);
             payloadBits = ChatSignalProcessor.bytesToLSBFirstBits(packet);
             stuffedPayloadBits = ChatSignalProcessor.applyBitStuffing(payloadBits);
-            frameBits = [flagBits, stuffedPayloadBits, ChatSignalProcessor.bytesToLSBFirstBits(uint8(126))];
+            frameBits = [flagBits, stuffedPayloadBits, ChatSignalProcessor.bytesToLSBFirstBits(postambleFlags)];
 
             bitCount = numel(frameBits);
             waveform = zeros(1, bitCount * samplesPerBit);
@@ -91,22 +93,29 @@ classdef ChatSignalProcessor
             settings = ChatSignalProcessor.defaultSettings();
             sampleRate = settings.SampleRate;
             normalizedAFSK = afskWaveform ./ max(abs(afskWaveform) + eps);
-            instantaneousPhase = 2 * pi * settings.FMCarrierFrequency * (0:numel(normalizedAFSK) - 1) / sampleRate;
             modulationPhase = 2 * pi * settings.FMFrequencyDeviation / sampleRate * cumsum(normalizedAFSK);
-            fmWaveform = cos(instantaneousPhase + modulationPhase);
+            fmWaveform = exp(1j * modulationPhase);
             timeAxis = (0:numel(fmWaveform) - 1) / sampleRate;
         end
 
         function recoveredAFSK = demodulateFMSignal(fmWaveform, sampleRate)
             settings = ChatSignalProcessor.defaultSettings();
-            timeAxis = (0:numel(fmWaveform) - 1) / sampleRate;
-            localCosine = cos(2 * pi * settings.FMCarrierFrequency * timeAxis);
-            localSine = -sin(2 * pi * settings.FMCarrierFrequency * timeAxis);
-            inPhase = conv(fmWaveform .* localCosine, ones(1, 16) / 16, 'same');
-            quadrature = conv(fmWaveform .* localSine, ones(1, 16) / 16, 'same');
-            modulationPhase = unwrap(atan2(quadrature, inPhase));
-            phaseDifference = [0, diff(modulationPhase)];
-            recoveredAFSK = phaseDifference * sampleRate / (2 * pi * settings.FMFrequencyDeviation);
+            if isempty(fmWaveform)
+                recoveredAFSK = [];
+                return;
+            end
+
+            if isreal(fmWaveform)
+                analyticSignal = complex(fmWaveform, zeros(size(fmWaveform)));
+            else
+                analyticSignal = fmWaveform;
+            end
+
+            phaseStep = angle(analyticSignal(2:end) .* conj(analyticSignal(1:end-1)));
+            recoveredAFSK = [0, phaseStep] * sampleRate / (2 * pi * settings.FMFrequencyDeviation);
+
+            % Smooth the discriminator output to reduce jitter in noisy captures.
+            recoveredAFSK = conv(recoveredAFSK, ones(1, 5) / 5, 'same');
             maxValue = max(abs(recoveredAFSK));
             if maxValue > 0
                 recoveredAFSK = recoveredAFSK / maxValue;
@@ -285,7 +294,7 @@ classdef ChatSignalProcessor
                         'BasebandSampleRate', settings.PlutoBasebandSampleRate, ...
                         'Gain', -10);
                     repeatedWaveform = repmat(fmWaveform(:), settings.PlutoBurstRepeats, 1);
-                    tx(complex(repeatedWaveform, zeros(numel(repeatedWaveform), 1)));
+                    tx(repeatedWaveform);
                     release(tx);
                 case 'Simulation File Loopback'
                     ChatSignalProcessor.saveFMToFile(filePath, fmWaveform, settings.SampleRate, centerFrequency, '');

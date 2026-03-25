@@ -93,11 +93,11 @@ classdef ChatTransmitterGUI < handle
             sampleRate = ChatSignalProcessor.defaultSettings().SampleRate;
             timeAxis = (0:numel(app.StoredFMWaveform) - 1) / sampleRate;
             figure('Name', 'Transmitter FM Waveform', 'NumberTitle', 'off', 'Color', 'w');
-            plot(timeAxis, app.StoredFMWaveform, 'm');
+            plot(timeAxis, real(app.StoredFMWaveform), 'm');
             grid on;
             xlabel('Time (s)');
             ylabel('Amplitude');
-            title('FM-Modulated Chat Waveform');
+            title('FM-Modulated Chat Waveform (Real Part)');
         end
 
         function appendLog(app, message)
