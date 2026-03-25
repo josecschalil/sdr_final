@@ -37,8 +37,9 @@ launchReceiverGUI
 - transmitter saves the FM waveform to `storedFMSignal.mat`
 - transmitter can attempt to send the FM waveform through ADALM-Pluto using MATLAB SDR support
 - receiver UI shows the same SDR dropdown and frequency dropdown
-- receiver can load or receive FM data, demodulate it, recover the AX.25 packet, and display the recovered text
-- receiver displays the recovered chat text in its own message panel
+- receiver can start a background listening loop and automatically display text when a new packet arrives
+- receiver can still perform a one-time manual receive for debugging
+- receiver loads or receives FM data, demodulates it, recovers the AX.25 packet, and displays the recovered text
 
 ## Notes
 

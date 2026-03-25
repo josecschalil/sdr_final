@@ -8,24 +8,40 @@ classdef ChatReceiverGUI < handle
         LogArea             matlab.ui.control.TextArea
         SDRDropDown         matlab.ui.control.DropDown
         FrequencyDropDown   matlab.ui.control.DropDown
+        ListenButton        matlab.ui.control.Button
+        StopButton          matlab.ui.control.Button
         ReceiveButton       matlab.ui.control.Button
         PlotButton          matlab.ui.control.Button
+        StatusLabel         matlab.ui.control.Label
         FMFilePath          char = ''
         LastFMWaveform      double = double([])
         LastPacket          uint8 = uint8([])
+        ListenTimer
+        PlutoReceiver
+        IsListening logical = false
+        LastFileTimestamp    char = ''
+        LastPacketSignature  char = ''
     end
 
     methods
         function app = ChatReceiverGUI()
             app.FMFilePath = fullfile(fileparts(mfilename('fullpath')), 'storedFMSignal.mat');
             app.createComponents();
-            app.appendLog('Receiver ready. Select SDR and frequency, then click Receive.');
+            app.appendLog('Receiver ready. Select SDR and frequency, then click Start Listening.');
+        end
+
+        function delete(app)
+            app.stopListening();
         end
     end
 
     methods (Access = private)
         function createComponents(app)
-            app.Figure = uifigure('Name', 'SDR Chat Receiver', 'Position', [940 80 820 540], 'Color', [0.96 0.98 0.97]);
+            app.Figure = uifigure( ...
+                'Name', 'SDR Chat Receiver', ...
+                'Position', [940 80 820 540], ...
+                'Color', [0.96 0.98 0.97], ...
+                'CloseRequestFcn', @(src, event)app.onFigureClosed()); %#ok<INUSD>
 
             uilabel(app.Figure, 'Text', 'SDR Chat Receiver', 'FontSize', 20, 'FontWeight', 'bold', 'Position', [20 500 260 28]);
             uilabel(app.Figure, 'Text', 'SDR', 'FontWeight', 'bold', 'Position', [20 462 80 22]);
@@ -34,8 +50,11 @@ classdef ChatReceiverGUI < handle
             uilabel(app.Figure, 'Text', 'Frequency Range', 'FontWeight', 'bold', 'Position', [260 462 120 22]);
             app.FrequencyDropDown = uidropdown(app.Figure, 'Items', ChatSignalProcessor.frequencyOptions(), 'Value', '915.00 MHz ISM', 'Position', [260 435 180 26]);
 
-            app.ReceiveButton = uibutton(app.Figure, 'push', 'Text', 'Receive Message', 'FontWeight', 'bold', 'Position', [470 435 150 30], 'ButtonPushedFcn', @(~,~)app.receiveMessage());
-            app.PlotButton = uibutton(app.Figure, 'push', 'Text', 'Plot Received FM', 'Position', [640 435 150 30], 'ButtonPushedFcn', @(~,~)app.plotReceivedWaveform());
+            app.ListenButton = uibutton(app.Figure, 'push', 'Text', 'Start Listening', 'FontWeight', 'bold', 'Position', [470 435 110 30], 'ButtonPushedFcn', @(~,~)app.startListening());
+            app.StopButton = uibutton(app.Figure, 'push', 'Text', 'Stop', 'Position', [590 435 70 30], 'ButtonPushedFcn', @(~,~)app.stopListening());
+            app.ReceiveButton = uibutton(app.Figure, 'push', 'Text', 'Receive Once', 'Position', [670 435 120 30], 'ButtonPushedFcn', @(~,~)app.receiveMessage());
+            app.PlotButton = uibutton(app.Figure, 'push', 'Text', 'Plot Received FM', 'Position', [640 395 150 30], 'ButtonPushedFcn', @(~,~)app.plotReceivedWaveform());
+            app.StatusLabel = uilabel(app.Figure, 'Text', 'Status: Idle', 'FontWeight', 'bold', 'Position', [470 395 150 22]);
 
             uilabel(app.Figure, 'Text', 'Received Text', 'FontWeight', 'bold', 'Position', [20 390 120 22]);
             app.MessagesArea = uitextarea(app.Figure, 'Position', [20 250 770 140], 'Editable', 'off', 'Value', {'No received messages yet.'});
@@ -49,20 +68,53 @@ classdef ChatReceiverGUI < handle
 
         function receiveMessage(app)
             try
-                centerFrequency = ChatSignalProcessor.frequencyFromLabel(app.FrequencyDropDown.Value);
-                [fmWaveform, sampleRate] = ChatSignalProcessor.receiveViaSelectedSDR(app.SDRDropDown.Value, centerFrequency, app.FMFilePath);
-                recoveredAFSK = ChatSignalProcessor.demodulateFMSignal(fmWaveform, sampleRate);
-                recoveredBits = ChatSignalProcessor.demodulateAFSKBits(recoveredAFSK, sampleRate);
-                recoveredPacket = ChatSignalProcessor.extractPacketFromBits(recoveredBits);
-                recoveredText = ChatSignalProcessor.decodeAX25Packet(recoveredPacket);
-
-                app.LastFMWaveform = fmWaveform;
-                app.LastPacket = recoveredPacket;
-                app.PacketArea.Value = ChatSignalProcessor.wrapPacketHex(recoveredPacket);
-                app.appendMessage(recoveredText);
-                app.appendLog(sprintf('Message received via %s at %.2f MHz.', app.SDRDropDown.Value, centerFrequency / 1e6));
+                messageReceived = app.processIncomingSignal();
+                if ~messageReceived
+                    app.appendLog('No new decodable packet was detected on this check.');
+                end
             catch exception
                 app.appendLog(sprintf('Receive failed: %s', exception.message));
+            end
+        end
+
+        function startListening(app)
+            if app.IsListening
+                app.appendLog('Receiver is already listening.');
+                return;
+            end
+
+            try
+                app.prepareListenerResources();
+                app.ListenTimer = timer( ...
+                    'ExecutionMode', 'fixedSpacing', ...
+                    'Period', 1.0, ...
+                    'BusyMode', 'drop', ...
+                    'TimerFcn', @(~, ~)app.listenTick());
+                start(app.ListenTimer);
+                app.IsListening = true;
+                app.StatusLabel.Text = 'Status: Listening';
+                app.appendLog(sprintf('Listening started on %s at %s.', app.SDRDropDown.Value, app.FrequencyDropDown.Value));
+            catch exception
+                app.stopListening();
+                app.appendLog(sprintf('Unable to start listening: %s', exception.message));
+            end
+        end
+
+        function stopListening(app)
+            if ~isempty(app.ListenTimer) && isvalid(app.ListenTimer)
+                stop(app.ListenTimer);
+                delete(app.ListenTimer);
+            end
+            app.ListenTimer = [];
+
+            if ~isempty(app.PlutoReceiver)
+                release(app.PlutoReceiver);
+            end
+            app.PlutoReceiver = [];
+
+            app.IsListening = false;
+            if ~isempty(app.StatusLabel) && isvalid(app.StatusLabel)
+                app.StatusLabel.Text = 'Status: Idle';
             end
         end
 
@@ -119,6 +171,122 @@ classdef ChatReceiverGUI < handle
             else
                 app.LogArea.Value = [currentLines; {entry}];
             end
+        end
+
+        function listenTick(app)
+            try
+                messageReceived = app.processIncomingSignal();
+                if messageReceived
+                    app.StatusLabel.Text = sprintf('Status: Last packet %s', datestr(now, 'HH:MM:SS'));
+                end
+            catch exception
+                app.appendLog(sprintf('Listening error: %s', exception.message));
+                app.stopListening();
+            end
+        end
+
+        function prepareListenerResources(app)
+            centerFrequency = ChatSignalProcessor.frequencyFromLabel(app.FrequencyDropDown.Value);
+            settings = ChatSignalProcessor.defaultSettings();
+
+            app.stopListening();
+            selection = char(app.SDRDropDown.Value);
+            if strcmp(selection, 'ADALM-PLUTO')
+                app.PlutoReceiver = sdrrx('Pluto', ...
+                    'CenterFrequency', centerFrequency, ...
+                    'BasebandSampleRate', settings.PlutoBasebandSampleRate, ...
+                    'SamplesPerFrame', settings.PlutoFrameLength, ...
+                    'OutputDataType', 'double');
+            else
+                app.PlutoReceiver = [];
+            end
+        end
+
+        function messageReceived = processIncomingSignal(app)
+            centerFrequency = ChatSignalProcessor.frequencyFromLabel(app.FrequencyDropDown.Value);
+            selection = char(app.SDRDropDown.Value);
+            [fmWaveform, sampleRate, sourceChanged] = app.fetchCurrentSignal(selection, centerFrequency);
+
+            if ~sourceChanged || isempty(fmWaveform)
+                messageReceived = false;
+                return;
+            end
+
+            if max(abs(fmWaveform)) < 0.01
+                messageReceived = false;
+                return;
+            end
+
+            recoveredAFSK = ChatSignalProcessor.demodulateFMSignal(fmWaveform, sampleRate);
+            recoveredBits = ChatSignalProcessor.demodulateAFSKBits(recoveredAFSK, sampleRate);
+            recoveredPacket = ChatSignalProcessor.extractPacketFromBits(recoveredBits);
+            recoveredText = ChatSignalProcessor.decodeAX25Packet(recoveredPacket);
+            packetSignature = sprintf('%02X', recoveredPacket);
+
+            if strcmp(packetSignature, app.LastPacketSignature)
+                messageReceived = false;
+                return;
+            end
+
+            app.LastFMWaveform = fmWaveform;
+            app.LastPacket = recoveredPacket;
+            app.LastPacketSignature = packetSignature;
+            app.PacketArea.Value = ChatSignalProcessor.wrapPacketHex(recoveredPacket);
+            app.appendMessage(recoveredText);
+            app.appendLog(sprintf('Message received via %s at %.2f MHz.', app.SDRDropDown.Value, centerFrequency / 1e6));
+            messageReceived = true;
+        end
+
+        function [fmWaveform, sampleRate, sourceChanged] = fetchCurrentSignal(app, selection, centerFrequency)
+            settings = ChatSignalProcessor.defaultSettings();
+
+            switch selection
+                case 'ADALM-PLUTO'
+                    if isempty(app.PlutoReceiver)
+                        app.prepareListenerResources();
+                    end
+                    receivedSamples = app.PlutoReceiver();
+                    fmWaveform = real(receivedSamples(:)).';
+                    sampleRate = settings.SampleRate;
+                    sourceChanged = true;
+                case {'Simulation File Loopback', 'No SDR (Signal Demo)'}
+                    if ~isfile(app.FMFilePath)
+                        fmWaveform = [];
+                        sampleRate = settings.SampleRate;
+                        sourceChanged = false;
+                        return;
+                    end
+
+                    fileInfo = dir(app.FMFilePath);
+                    fileTimestamp = fileInfo.date;
+                    if strcmp(fileTimestamp, app.LastFileTimestamp)
+                        fmWaveform = [];
+                        sampleRate = settings.SampleRate;
+                        sourceChanged = false;
+                        return;
+                    end
+
+                    loaded = ChatSignalProcessor.loadFMFromFile(app.FMFilePath);
+                    metadata = loaded.metadata;
+                    if isfield(metadata, 'CenterFrequency') && abs(metadata.CenterFrequency - centerFrequency) > 1
+                        fmWaveform = [];
+                        sampleRate = settings.SampleRate;
+                        sourceChanged = false;
+                        return;
+                    end
+
+                    app.LastFileTimestamp = fileTimestamp;
+                    fmWaveform = loaded.savedWaveform;
+                    sampleRate = metadata.SampleRate;
+                    sourceChanged = true;
+                otherwise
+                    error('Unsupported SDR selection.');
+            end
+        end
+
+        function onFigureClosed(app)
+            app.stopListening();
+            delete(app.Figure);
         end
     end
 end
