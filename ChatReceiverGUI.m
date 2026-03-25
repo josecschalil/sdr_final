@@ -13,6 +13,7 @@ classdef ChatReceiverGUI < handle
         ReceiveButton       matlab.ui.control.Button
         PlotButton          matlab.ui.control.Button
         StatusLabel         matlab.ui.control.Label
+        PowerLabel          matlab.ui.control.Label
         FMFilePath          char = ''
         LastFMWaveform      double = double([])
         LastPacket          uint8 = uint8([])
@@ -23,6 +24,7 @@ classdef ChatReceiverGUI < handle
         LastPacketSignature  char = ''
         ConsecutiveDecodeMisses double = 0
         SignalBuffer         double = double([])
+        LatestFrame          double = double([])
     end
 
     methods
@@ -57,6 +59,7 @@ classdef ChatReceiverGUI < handle
             app.ReceiveButton = uibutton(app.Figure, 'push', 'Text', 'Receive Once', 'Position', [670 435 120 30], 'ButtonPushedFcn', @(~,~)app.receiveMessage());
             app.PlotButton = uibutton(app.Figure, 'push', 'Text', 'Plot Received FM', 'Position', [640 395 150 30], 'ButtonPushedFcn', @(~,~)app.plotReceivedWaveform());
             app.StatusLabel = uilabel(app.Figure, 'Text', 'Status: Idle', 'FontWeight', 'bold', 'Position', [470 395 150 22]);
+            app.PowerLabel = uilabel(app.Figure, 'Text', 'Signal: -- dB', 'Position', [470 372 150 18]);
 
             uilabel(app.Figure, 'Text', 'Received Text', 'FontWeight', 'bold', 'Position', [20 390 120 22]);
             app.MessagesArea = uitextarea(app.Figure, 'Position', [20 250 770 140], 'Editable', 'off', 'Value', {'No received messages yet.'});
@@ -87,6 +90,7 @@ classdef ChatReceiverGUI < handle
 
             try
                 app.SignalBuffer = double([]);
+                app.LatestFrame = double([]);
                 app.prepareListenerResources();
                 app.ListenTimer = timer( ...
                     'ExecutionMode', 'fixedSpacing', ...
@@ -115,6 +119,7 @@ classdef ChatReceiverGUI < handle
             end
             app.PlutoReceiver = [];
             app.SignalBuffer = double([]);
+            app.LatestFrame = double([]);
 
             app.IsListening = false;
             if ~isempty(app.StatusLabel) && isvalid(app.StatusLabel)
@@ -226,7 +231,10 @@ classdef ChatReceiverGUI < handle
                 return;
             end
 
-            if max(abs(fmWaveform)) < 0.01
+            latestPowerDb = app.measureFramePowerDb(app.LatestFrame);
+            app.PowerLabel.Text = sprintf('Signal: %.1f dB', latestPowerDb);
+
+            if latestPowerDb < -35
                 messageReceived = false;
                 return;
             end
@@ -258,6 +266,7 @@ classdef ChatReceiverGUI < handle
                         app.prepareListenerResources();
                     end
                     receivedSamples = app.PlutoReceiver();
+                    app.LatestFrame = receivedSamples(:).';
                     app.SignalBuffer = [app.SignalBuffer, receivedSamples(:).'];
                     maxBufferSamples = 4 * settings.PlutoFrameLength;
                     if numel(app.SignalBuffer) > maxBufferSamples
@@ -294,6 +303,7 @@ classdef ChatReceiverGUI < handle
 
                     app.LastFileTimestamp = fileTimestamp;
                     fmWaveform = loaded.savedWaveform;
+                    app.LatestFrame = fmWaveform;
                     app.SignalBuffer = fmWaveform;
                     sampleRate = metadata.SampleRate;
                     sourceChanged = true;
@@ -323,6 +333,16 @@ classdef ChatReceiverGUI < handle
                     return;
                 end
             end
+        end
+
+        function powerDb = measureFramePowerDb(~, frame)
+            if isempty(frame)
+                powerDb = -Inf;
+                return;
+            end
+
+            frameMagnitude = abs(frame);
+            powerDb = 20 * log10(sqrt(mean(frameMagnitude .^ 2)) + eps);
         end
     end
 end
