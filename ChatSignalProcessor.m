@@ -12,6 +12,8 @@ classdef ChatSignalProcessor
                 'PlutoBasebandSampleRate', 96000, ...
                 'PlutoFrameLength', 65536, ...
                 'PlutoBurstRepeats', 12, ...
+                'PlutoTxGain', 0, ...
+                'PlutoRxGain', 50, ...
                 'AX25PreambleFlags', 32, ...
                 'AX25PostambleFlags', 4);
         end
@@ -116,6 +118,7 @@ classdef ChatSignalProcessor
 
             % Smooth the discriminator output to reduce jitter in noisy captures.
             recoveredAFSK = conv(recoveredAFSK, ones(1, 5) / 5, 'same');
+            recoveredAFSK = recoveredAFSK - mean(recoveredAFSK);
             maxValue = max(abs(recoveredAFSK));
             if maxValue > 0
                 recoveredAFSK = recoveredAFSK / maxValue;
@@ -138,20 +141,21 @@ classdef ChatSignalProcessor
             trimmedWaveform = waveform(startSample:end);
             bitCount = floor(numel(trimmedWaveform) / samplesPerBit);
             bits = zeros(1, bitCount);
-            previousTone = settings.MarkFrequency;
+            [markTone, spaceTone] = ChatSignalProcessor.estimateAFSKTones(trimmedWaveform, sampleRate, settings.MarkFrequency, settings.SpaceFrequency);
+            previousTone = markTone;
 
             for bitIndex = 1:bitCount
                 sampleIndices = (bitIndex - 1) * samplesPerBit + (1:samplesPerBit);
                 bitSamples = trimmedWaveform(sampleIndices);
                 localTime = (0:samplesPerBit - 1) / sampleRate;
 
-                markMetric = abs(sum(bitSamples .* exp(-1j * 2 * pi * settings.MarkFrequency * localTime)));
-                spaceMetric = abs(sum(bitSamples .* exp(-1j * 2 * pi * settings.SpaceFrequency * localTime)));
+                markMetric = abs(sum(bitSamples .* exp(-1j * 2 * pi * markTone * localTime)));
+                spaceMetric = abs(sum(bitSamples .* exp(-1j * 2 * pi * spaceTone * localTime)));
 
                 if markMetric >= spaceMetric
-                    currentTone = settings.MarkFrequency;
+                    currentTone = markTone;
                 else
-                    currentTone = settings.SpaceFrequency;
+                    currentTone = spaceTone;
                 end
 
                 if currentTone == previousTone
@@ -292,7 +296,7 @@ classdef ChatSignalProcessor
                     tx = sdrtx('Pluto', ...
                         'CenterFrequency', centerFrequency, ...
                         'BasebandSampleRate', settings.PlutoBasebandSampleRate, ...
-                        'Gain', -10);
+                        'Gain', settings.PlutoTxGain);
                     repeatedWaveform = repmat(fmWaveform(:), settings.PlutoBurstRepeats, 1);
                     tx(repeatedWaveform);
                     release(tx);
@@ -460,6 +464,56 @@ classdef ChatSignalProcessor
                     end
                 end
                 byteArray(byteIndex) = byteValue;
+            end
+        end
+
+        function [markTone, spaceTone] = estimateAFSKTones(waveform, sampleRate, defaultMark, defaultSpace)
+            markTone = defaultMark;
+            spaceTone = defaultSpace;
+
+            if isempty(waveform)
+                return;
+            end
+
+            maxSamples = min(numel(waveform), 131072);
+            segment = waveform(1:maxSamples);
+            nfft = 2^nextpow2(maxSamples);
+            spectrum = abs(fft(segment, nfft)).^2;
+            frequencyAxis = (0:nfft - 1) * sampleRate / nfft;
+
+            halfCount = floor(nfft / 2);
+            spectrum = spectrum(1:halfCount);
+            frequencyAxis = frequencyAxis(1:halfCount);
+
+            candidateMask = frequencyAxis >= 500 & frequencyAxis <= 4000;
+            if ~any(candidateMask)
+                return;
+            end
+
+            candidateFrequencies = frequencyAxis(candidateMask);
+            candidateSpectrum = spectrum(candidateMask);
+            [~, sortedIndices] = sort(candidateSpectrum, 'descend');
+            peakCount = min(30, numel(sortedIndices));
+            peakFrequencies = candidateFrequencies(sortedIndices(1:peakCount));
+            peakPowers = candidateSpectrum(sortedIndices(1:peakCount));
+
+            bestScore = -Inf;
+            for i = 1:peakCount
+                for j = i + 1:peakCount
+                    f1 = peakFrequencies(i);
+                    f2 = peakFrequencies(j);
+                    separation = abs(f2 - f1);
+                    if separation < 700 || separation > 1300
+                        continue;
+                    end
+
+                    score = peakPowers(i) + peakPowers(j) - abs(separation - 1000);
+                    if score > bestScore
+                        bestScore = score;
+                        markTone = min(f1, f2);
+                        spaceTone = max(f1, f2);
+                    end
+                end
             end
         end
     end
