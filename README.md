@@ -1,13 +1,14 @@
-# MATLAB Simple Chat GUI
+# MATLAB Pluto Simple Chat
 
-This project now uses a simple and reliable two-system MATLAB chat over TCP/IP, focused only on getting text across systems.
+This project now uses a simpler Pluto SDR text modem so the transmitter and receiver still work through ADALM Pluto, but without the heavier AX.25/AFSK/FM chain.
 
 ## Files
 
 - `launchChatGUI.m`: opens the transmitter app
 - `launchReceiverGUI.m`: opens the receiver app
-- `SimpleChatTransmitterGUI.m`: transmitter-side GUI
-- `SimpleChatReceiverGUI.m`: receiver-side GUI
+- `PlutoSimpleChatTransmitterGUI.m`: transmitter-side GUI
+- `PlutoSimpleChatReceiverGUI.m`: receiver-side GUI
+- `PlutoSimpleChatCodec.m`: shared simple packet/modem logic
 
 ## Run
 
@@ -25,14 +26,14 @@ launchReceiverGUI
 
 ## Current behavior
 
-- transmitter app sends plain text to a receiver system using `tcpclient`
-- receiver app listens on a chosen port using `tcpserver`
-- receiver automatically prints text as soon as a message arrives
-- sender only needs the receiver IP address and port
-- default port is `55000`
+- transmitter sends plain text as a simple OOK packet through ADALM Pluto
+- receiver listens continuously and automatically prints text when a valid packet is recovered
+- both sides include an SDR selection with `ADALM-PLUTO` and `Simulation File Loopback`
+- both sides include the 3 frequency choices:
+  `433.92 MHz ISM`, `915.00 MHz ISM`, `2400.00 MHz ISM`
+- `Simulation File Loopback` is available for testing the full transmitter/receiver logic without radio hardware
 
 ## Notes
 
-- Both systems should be on the same network and able to reach each other by IP.
-- If Windows Firewall prompts for MATLAB network access, allow it on the receiver system.
-- I could not run MATLAB in this environment, so you still need to test the actual network connection on your two systems.
+- This version is intentionally simpler than the previous modulation stack so the focus stays on getting text across two Pluto systems.
+- I could not run MATLAB or test Pluto hardware in this environment, so live SDR testing still has to be done on your two systems.

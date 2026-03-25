@@ -1,5 +1,5 @@
 function launchChatGUI()
-% launchChatGUI Opens the simple network chat transmitter.
+% launchChatGUI Opens the simple Pluto chat transmitter.
 
-    app = SimpleChatTransmitterGUI(); %#ok<NASGU>
+    app = PlutoSimpleChatTransmitterGUI(); %#ok<NASGU>
 end

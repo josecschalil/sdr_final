@@ -1,5 +1,5 @@
 function launchReceiverGUI()
-% launchReceiverGUI Opens the simple network chat receiver.
+% launchReceiverGUI Opens the simple Pluto chat receiver.
 
-    app = SimpleChatReceiverGUI(); %#ok<NASGU>
+    app = PlutoSimpleChatReceiverGUI(); %#ok<NASGU>
 end
