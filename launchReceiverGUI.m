@@ -1,5 +1,5 @@
 function launchReceiverGUI()
-% launchReceiverGUI Opens the receiver-side SDR chat app.
+% launchReceiverGUI Opens the simple network chat receiver.
 
-    app = ChatReceiverGUI(); %#ok<NASGU>
+    app = SimpleChatReceiverGUI(); %#ok<NASGU>
 end

@@ -1,5 +1,5 @@
 function launchChatGUI()
-% launchChatGUI Opens the transmitter-side SDR chat app.
+% launchChatGUI Opens the simple network chat transmitter.
 
-    app = ChatTransmitterGUI(); %#ok<NASGU>
+    app = SimpleChatTransmitterGUI(); %#ok<NASGU>
 end
