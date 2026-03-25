@@ -17,6 +17,8 @@ classdef PlutoSimpleChatReceiverGUI < handle
         FilePath            char = ''
         LastMessage         char = ''
         LastFileTimestamp   char = ''
+        SignalBuffer
+        LatestFrame
     end
 
     methods
@@ -69,7 +71,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
                 app.prepareReceiver();
                 app.TimerObj = timer( ...
                     'ExecutionMode', 'fixedSpacing', ...
-                    'Period', 1.0, ...
+                    'Period', 0.2, ...
                     'BusyMode', 'drop', ...
                     'TimerFcn', @(~, ~)app.listenTick());
                 start(app.TimerObj);
@@ -92,6 +94,8 @@ classdef PlutoSimpleChatReceiverGUI < handle
                 release(app.Receiver);
             end
             app.Receiver = [];
+            app.SignalBuffer = [];
+            app.LatestFrame = [];
             app.StatusLabel.Text = 'Status: Idle';
         end
 
@@ -120,6 +124,8 @@ classdef PlutoSimpleChatReceiverGUI < handle
         function prepareReceiver(app)
             app.stopListening();
             app.LastFileTimestamp = '';
+            app.SignalBuffer = [];
+            app.LatestFrame = [];
             selection = char(app.SDRDropDown.Value);
             if strcmp(selection, 'ADALM-PLUTO')
                 centerFrequency = PlutoSimpleChatCodec.frequencyFromLabel(app.FrequencyDropDown.Value);
@@ -136,7 +142,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
                 return;
             end
 
-            powerDb = app.measurePowerDb(samples);
+            powerDb = app.measurePowerDb(app.LatestFrame);
             app.PowerLabel.Text = sprintf('Signal: %.1f dB', powerDb);
             if powerDb < -45
                 didReceive = false;
@@ -163,7 +169,13 @@ classdef PlutoSimpleChatReceiverGUI < handle
                     if isempty(app.Receiver)
                         app.prepareReceiver();
                     end
-                    samples = app.Receiver();
+                    app.LatestFrame = app.Receiver();
+                    app.SignalBuffer = [app.SignalBuffer; app.LatestFrame(:)];
+                    maxBufferSamples = 4 * PlutoSimpleChatCodec.defaultSettings().PlutoFrameLength;
+                    if numel(app.SignalBuffer) > maxBufferSamples
+                        app.SignalBuffer = app.SignalBuffer(end - maxBufferSamples + 1:end);
+                    end
+                    samples = app.SignalBuffer;
                     sourceChanged = true;
                 case 'Simulation File Loopback'
                     if ~isfile(app.FilePath)
@@ -189,6 +201,8 @@ classdef PlutoSimpleChatReceiverGUI < handle
 
                     app.LastFileTimestamp = fileInfo.date;
                     samples = loaded.savedWaveform;
+                    app.LatestFrame = samples;
+                    app.SignalBuffer = samples(:);
                     sourceChanged = true;
                 otherwise
                     error('Unsupported SDR selection.');
