@@ -30,7 +30,7 @@ classdef PlutoSimpleChatTransmitterGUI < handle
             app.SDRDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.sdrOptions(), 'Value', 'ADALM-PLUTO', 'Position', [20 360 220 26]);
 
             uilabel(app.Figure, 'Text', 'Frequency Range', 'FontWeight', 'bold', 'Position', [270 390 120 22]);
-            app.FrequencyDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.frequencyOptions(), 'Value', '433.92 MHz ISM', 'Position', [270 360 180 26]);
+            app.FrequencyDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.frequencyOptions(), 'Value', '915.00 MHz ISM', 'Position', [270 360 180 26]);
 
             uilabel(app.Figure, 'Text', 'Message', 'FontWeight', 'bold', 'Position', [20 315 80 22]);
             app.InputField = uieditfield(app.Figure, 'text', 'Position', [20 280 610 30], 'Placeholder', 'Type the message to transmit');
@@ -51,6 +51,7 @@ classdef PlutoSimpleChatTransmitterGUI < handle
             try
                 centerFrequency = PlutoSimpleChatCodec.frequencyFromLabel(app.FrequencyDropDown.Value);
                 app.StoredWaveform = PlutoSimpleChatCodec.createTransmitWaveform(char(message));
+                PlutoSimpleChatCodec.saveWaveform(app.FilePath, app.StoredWaveform, centerFrequency);
                 PlutoSimpleChatCodec.transmit(app.SDRDropDown.Value, centerFrequency, app.StoredWaveform, app.FilePath);
                 app.appendLog(sprintf('Message sent via %s at %.2f MHz: %s', app.SDRDropDown.Value, centerFrequency / 1e6, char(message)));
                 app.InputField.Value = '';

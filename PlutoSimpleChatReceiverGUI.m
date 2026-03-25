@@ -19,6 +19,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
         LastFileTimestamp   char = ''
         SignalBuffer
         LatestFrame
+        TickCount double = 0
     end
 
     methods
@@ -46,7 +47,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
             app.SDRDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.sdrOptions(), 'Value', 'ADALM-PLUTO', 'Position', [20 380 220 26]);
 
             uilabel(app.Figure, 'Text', 'Frequency Range', 'FontWeight', 'bold', 'Position', [270 410 120 22]);
-            app.FrequencyDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.frequencyOptions(), 'Value', '433.92 MHz ISM', 'Position', [270 380 180 26]);
+            app.FrequencyDropDown = uidropdown(app.Figure, 'Items', PlutoSimpleChatCodec.frequencyOptions(), 'Value', '915.00 MHz ISM', 'Position', [270 380 180 26]);
 
             app.StartButton = uibutton(app.Figure, 'push', 'Text', 'Start Listening', 'FontWeight', 'bold', 'Position', [480 380 120 30], 'ButtonPushedFcn', @(~, ~)app.startListening());
             app.StopButton = uibutton(app.Figure, 'push', 'Text', 'Stop', 'Position', [615 380 80 30], 'ButtonPushedFcn', @(~, ~)app.stopListening());
@@ -96,6 +97,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
             app.Receiver = [];
             app.SignalBuffer = [];
             app.LatestFrame = [];
+            app.TickCount = 0;
             app.StatusLabel.Text = 'Status: Idle';
         end
 
@@ -112,6 +114,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
 
         function listenTick(app)
             try
+                app.TickCount = app.TickCount + 1;
                 didReceive = app.processIncoming();
                 if didReceive
                     app.StatusLabel.Text = sprintf('Status: Last message %s', datestr(now, 'HH:MM:SS'));
@@ -126,6 +129,7 @@ classdef PlutoSimpleChatReceiverGUI < handle
             app.LastFileTimestamp = '';
             app.SignalBuffer = [];
             app.LatestFrame = [];
+            app.TickCount = 0;
             selection = char(app.SDRDropDown.Value);
             if strcmp(selection, 'ADALM-PLUTO')
                 centerFrequency = PlutoSimpleChatCodec.frequencyFromLabel(app.FrequencyDropDown.Value);
@@ -144,6 +148,9 @@ classdef PlutoSimpleChatReceiverGUI < handle
 
             powerDb = app.measurePowerDb(app.LatestFrame);
             app.PowerLabel.Text = sprintf('Signal: %.1f dB', powerDb);
+            if mod(app.TickCount, 10) == 0
+                app.appendLog(sprintf('Listening power level: %.1f dB', powerDb));
+            end
             if powerDb < -45
                 didReceive = false;
                 return;
