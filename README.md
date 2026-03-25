@@ -40,6 +40,7 @@ launchReceiverGUI
 - receiver can start a background listening loop and automatically display text when a new packet arrives
 - receiver can still perform a one-time manual receive for debugging
 - receiver loads or receives FM data, demodulates it, recovers the AX.25 packet, and displays the recovered text
+- live receiver decode now scans symbol timing offsets and multiple AX.25 flag pairs to find a CRC-valid packet
 
 ## Notes
 

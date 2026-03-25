@@ -11,7 +11,8 @@ classdef ChatSignalProcessor
                 'FMCarrierFrequency', 10000, ...
                 'FMFrequencyDeviation', 3000, ...
                 'PlutoBasebandSampleRate', 96000, ...
-                'PlutoFrameLength', 65536);
+                'PlutoFrameLength', 65536, ...
+                'PlutoBurstRepeats', 12);
         end
 
         function packet = createAX25Packet(message)
@@ -112,16 +113,27 @@ classdef ChatSignalProcessor
             end
         end
 
-        function bits = demodulateAFSKBits(waveform, sampleRate)
+        function bits = demodulateAFSKBits(waveform, sampleRate, sampleOffset)
             settings = ChatSignalProcessor.defaultSettings();
+            if nargin < 3
+                sampleOffset = 0;
+            end
+
             samplesPerBit = round(sampleRate / settings.BitRate);
-            bitCount = floor(numel(waveform) / samplesPerBit);
+            startSample = sampleOffset + 1;
+            if startSample > numel(waveform)
+                bits = zeros(1, 0);
+                return;
+            end
+
+            trimmedWaveform = waveform(startSample:end);
+            bitCount = floor(numel(trimmedWaveform) / samplesPerBit);
             bits = zeros(1, bitCount);
             previousTone = settings.MarkFrequency;
 
             for bitIndex = 1:bitCount
                 sampleIndices = (bitIndex - 1) * samplesPerBit + (1:samplesPerBit);
-                bitSamples = waveform(sampleIndices);
+                bitSamples = trimmedWaveform(sampleIndices);
                 localTime = (0:samplesPerBit - 1) / sampleRate;
 
                 markMetric = abs(sum(bitSamples .* exp(-1j * 2 * pi * settings.MarkFrequency * localTime)));
@@ -151,23 +163,65 @@ classdef ChatSignalProcessor
                 error('Unable to find AX.25 flag bytes in the recovered bit stream.');
             end
 
-            openingFlagIndex = flagStartIndices(1);
-            while numel(flagStartIndices) > 1 && flagStartIndices(2) == openingFlagIndex + 8
-                flagStartIndices(1) = [];
-                openingFlagIndex = flagStartIndices(1);
+            minPacketBytes = 18;
+            maxPacketBytes = 512;
+            for startIdx = 1:numel(flagStartIndices) - 1
+                for endIdx = startIdx + 1:numel(flagStartIndices)
+                    openingFlagIndex = flagStartIndices(startIdx);
+                    closingFlagIndex = flagStartIndices(endIdx);
+                    payloadBitCount = closingFlagIndex - (openingFlagIndex + 8);
+
+                    if payloadBitCount < minPacketBytes * 8
+                        continue;
+                    end
+
+                    if payloadBitCount > maxPacketBytes * 10
+                        break;
+                    end
+
+                    payloadBits = bits(openingFlagIndex + 8:closingFlagIndex - 1);
+                    payloadBits = ChatSignalProcessor.removeBitStuffing(payloadBits);
+                    fullByteCount = floor(numel(payloadBits) / 8);
+
+                    if fullByteCount < minPacketBytes || fullByteCount > maxPacketBytes
+                        continue;
+                    end
+
+                    candidateBits = payloadBits(1:fullByteCount * 8);
+                    candidatePacket = ChatSignalProcessor.bitsToBytesLSBFirst(candidateBits);
+
+                    try
+                        ChatSignalProcessor.decodeAX25Packet(candidatePacket);
+                        packet = candidatePacket;
+                        return;
+                    catch
+                    end
+                end
             end
 
-            closingFlagIndex = flagStartIndices(end);
-            payloadBits = bits(openingFlagIndex + 8:closingFlagIndex - 1);
-            payloadBits = ChatSignalProcessor.removeBitStuffing(payloadBits);
+            error('Unable to recover a CRC-valid AX.25 packet from the bit stream.');
+        end
 
-            fullByteCount = floor(numel(payloadBits) / 8);
-            if fullByteCount == 0
-                error('Recovered payload does not contain any full bytes.');
+        function packet = recoverPacketFromFMWaveform(fmWaveform, sampleRate)
+            settings = ChatSignalProcessor.defaultSettings();
+            recoveredAFSK = ChatSignalProcessor.demodulateFMSignal(fmWaveform, sampleRate);
+            samplesPerBit = round(sampleRate / settings.BitRate);
+            maxOffset = max(samplesPerBit - 1, 0);
+
+            for sampleOffset = 0:maxOffset
+                bits = ChatSignalProcessor.demodulateAFSKBits(recoveredAFSK, sampleRate, sampleOffset);
+                if numel(bits) < 8 * 18
+                    continue;
+                end
+
+                try
+                    packet = ChatSignalProcessor.extractPacketFromBits(bits);
+                    return;
+                catch
+                end
             end
 
-            payloadBits = payloadBits(1:fullByteCount * 8);
-            packet = ChatSignalProcessor.bitsToBytesLSBFirst(payloadBits);
+            error('No valid AX.25 packet was recovered across tested symbol offsets.');
         end
 
         function hexLines = wrapPacketHex(packet)
@@ -230,7 +284,8 @@ classdef ChatSignalProcessor
                         'CenterFrequency', centerFrequency, ...
                         'BasebandSampleRate', settings.PlutoBasebandSampleRate, ...
                         'Gain', -10);
-                    tx(complex(fmWaveform(:), zeros(numel(fmWaveform), 1)));
+                    repeatedWaveform = repmat(fmWaveform(:), settings.PlutoBurstRepeats, 1);
+                    tx(complex(repeatedWaveform, zeros(numel(repeatedWaveform), 1)));
                     release(tx);
                 case 'Simulation File Loopback'
                     ChatSignalProcessor.saveFMToFile(filePath, fmWaveform, settings.SampleRate, centerFrequency, '');

@@ -21,6 +21,7 @@ classdef ChatReceiverGUI < handle
         IsListening logical = false
         LastFileTimestamp    char = ''
         LastPacketSignature  char = ''
+        ConsecutiveDecodeMisses double = 0
     end
 
     methods
@@ -177,11 +178,19 @@ classdef ChatReceiverGUI < handle
             try
                 messageReceived = app.processIncomingSignal();
                 if messageReceived
+                    app.ConsecutiveDecodeMisses = 0;
                     app.StatusLabel.Text = sprintf('Status: Last packet %s', datestr(now, 'HH:MM:SS'));
                 end
             catch exception
-                app.appendLog(sprintf('Listening error: %s', exception.message));
-                app.stopListening();
+                if app.isRecoverableDecodeError(exception)
+                    app.ConsecutiveDecodeMisses = app.ConsecutiveDecodeMisses + 1;
+                    if mod(app.ConsecutiveDecodeMisses, 10) == 1
+                        app.appendLog('Listening: signal detected but no valid AX.25 packet decoded yet.');
+                    end
+                else
+                    app.appendLog(sprintf('Listening error: %s', exception.message));
+                    app.stopListening();
+                end
             end
         end
 
@@ -217,9 +226,7 @@ classdef ChatReceiverGUI < handle
                 return;
             end
 
-            recoveredAFSK = ChatSignalProcessor.demodulateFMSignal(fmWaveform, sampleRate);
-            recoveredBits = ChatSignalProcessor.demodulateAFSKBits(recoveredAFSK, sampleRate);
-            recoveredPacket = ChatSignalProcessor.extractPacketFromBits(recoveredBits);
+            recoveredPacket = ChatSignalProcessor.recoverPacketFromFMWaveform(fmWaveform, sampleRate);
             recoveredText = ChatSignalProcessor.decodeAX25Packet(recoveredPacket);
             packetSignature = sprintf('%02X', recoveredPacket);
 
@@ -287,6 +294,24 @@ classdef ChatReceiverGUI < handle
         function onFigureClosed(app)
             app.stopListening();
             delete(app.Figure);
+        end
+
+        function isRecoverable = isRecoverableDecodeError(~, exception)
+            recoverableMessages = { ...
+                'CRC check failed', ...
+                'Unable to find AX.25 flag bytes', ...
+                'Unable to recover a CRC-valid AX.25 packet', ...
+                'No valid AX.25 packet was recovered across tested symbol offsets', ...
+                'Recovered payload does not contain any full bytes', ...
+                'Packet is too short to be a valid AX.25 UI frame'};
+
+            isRecoverable = false;
+            for index = 1:numel(recoverableMessages)
+                if contains(exception.message, recoverableMessages{index})
+                    isRecoverable = true;
+                    return;
+                end
+            end
         end
     end
 end
